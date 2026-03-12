@@ -1,2 +1,2 @@
 #!/bin/bash
-./download.sh 'https://atlasfuel.com.au/atlas-fuel-pricing/'
+./download.sh 'https://globalcrm.atlasfuel.com.au/fuelrates.php'

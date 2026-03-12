@@ -24,29 +24,11 @@ if [[ ! "$URL" =~ ^https?:// ]]; then
   exit 1
 fi
 
-# Download main page to find iframe URL
+# Fetch the rates page
 echo "Downloading $URL"
-TEMP_MAIN=$(mktemp)
-curl -s -L "$URL" -o "$TEMP_MAIN" || {
-  echo "Error: Failed to download $URL"
-  rm -f "$TEMP_MAIN"
-  exit 1
-}
-
-# Extract iframe src containing fuelrates
-IFRAME_URL=$(grep -o 'src="[^"]*fuelrates[^"]*"' "$TEMP_MAIN" | head -1 | sed 's/^src="//;s/"$//')
-rm -f "$TEMP_MAIN"
-
-if [ -z "$IFRAME_URL" ]; then
-  echo "Error: Could not find fuelrates iframe in the page"
-  exit 1
-fi
-
-# Fetch the iframe content
-echo "Fetching rates from: $IFRAME_URL"
 TEMP_TABLE=$(mktemp)
-curl -s -L "$IFRAME_URL" -o "$TEMP_TABLE" || {
-  echo "Error: Failed to download $IFRAME_URL"
+curl -s -L "$URL" -o "$TEMP_TABLE" || {
+  echo "Error: Failed to download $URL"
   rm -f "$TEMP_TABLE"
   exit 1
 }
