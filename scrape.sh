@@ -1,2 +1,2 @@
 #!/bin/bash
-./download.sh 'https://globalcrm.atlasfuel.com.au/fuelrates.php'
+./download.sh 'https://globalcrm.atlasfuel.com.au/api/margin-price'
