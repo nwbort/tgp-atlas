@@ -1,36 +1,14 @@
 #!/usr/bin/env bash
 #
-# download - Simple downloader that always constructs the filename from the URL
+# download - Fetch TGP fuel pricing table and save as CSV
 # Usage: ./download.sh URL
 
 set -e
 
-# Function to detect MIME type and return appropriate extension
-get_file_extension() {
-  local file_path="$1"
-  local mime_type=$(file --mime-type -b "$file_path")
-  local extension=""
-  
-  case "$mime_type" in
-    text/html)                extension=".html" ;;
-    application/json)         extension=".json" ;;
-    text/plain)               extension=".txt" ;;
-    application/javascript)   extension=".js" ;;
-    application/xml|text/xml) extension=".xml" ;;
-    application/pdf)          extension=".pdf" ;;
-    image/jpeg)               extension=".jpg" ;;
-    image/png)                extension=".png" ;;
-    image/gif)                extension=".gif" ;;
-    image/svg+xml)            extension=".svg" ;;
-    application/zip)          extension=".zip" ;;
-    application/gzip)         extension=".gz" ;;
-    application/x-tar)        extension=".tar" ;;
-    application/x-bzip2)      extension=".bz2" ;;
-    *)                        extension=".html" ;; # Default to HTML if unknown
-  esac
-  
-  echo "$extension"
-}
+CURRENT_CSV="tgp-atlas-current.csv"
+HISTORY_CSV="tgp-atlas-history.csv"
+CURRENT_DIR="$(pwd)"
+SCRAPED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Check if URL provided
 if [ $# -ne 1 ]; then
@@ -46,50 +24,132 @@ if [[ ! "$URL" =~ ^https?:// ]]; then
   exit 1
 fi
 
-# Create temporary file
-TEMP_FILE=$(mktemp)
-
-# Download the file
+# Download main page to find iframe URL
 echo "Downloading $URL"
-curl -s -L "$URL" -o "$TEMP_FILE" || {
+TEMP_MAIN=$(mktemp)
+curl -s -L "$URL" -o "$TEMP_MAIN" || {
   echo "Error: Failed to download $URL"
-  rm -f "$TEMP_FILE"
+  rm -f "$TEMP_MAIN"
   exit 1
 }
 
-# Get file extension based on MIME type
-EXTENSION=$(get_file_extension "$TEMP_FILE")
+# Extract iframe src containing fuelrates
+IFRAME_URL=$(grep -o 'src="[^"]*fuelrates[^"]*"' "$TEMP_MAIN" | head -1 | sed 's/^src="//;s/"$//')
+rm -f "$TEMP_MAIN"
 
-# Always construct filename from the URL, replacing slashes with hyphens
-FILENAME=$(echo "$URL" | sed -E 's|^https?://||' | sed -E 's|^www\.||' | sed 's|/$||' | sed 's|/|-|g')
-
-# Add extension to the filename
-FILENAME="${FILENAME}${EXTENSION}"
-
-# Make sure we don't end up with just an extension
-if [ "$FILENAME" = "${EXTENSION}" ]; then
-  FILENAME="index${EXTENSION}"
+if [ -z "$IFRAME_URL" ]; then
+  echo "Error: Could not find fuelrates iframe in the page"
+  exit 1
 fi
 
-# Get the current directory to ensure we save to this location
-CURRENT_DIR="$(pwd)"
-FULL_PATH="${CURRENT_DIR}/${FILENAME}"
+# Fetch the iframe content
+echo "Fetching rates from: $IFRAME_URL"
+TEMP_TABLE=$(mktemp)
+curl -s -L "$IFRAME_URL" -o "$TEMP_TABLE" || {
+  echo "Error: Failed to download $IFRAME_URL"
+  rm -f "$TEMP_TABLE"
+  exit 1
+}
 
-# Pretty-print JSON if applicable
-if [ "$EXTENSION" = ".json" ]; then
-  # Create another temporary file for the pretty-printed version
-  PRETTY_TEMP=$(mktemp)
-  # Try to pretty-print with jq, but don't fail if jq fails
-  if command -v jq &> /dev/null; then
-    if jq . "$TEMP_FILE" > "$PRETTY_TEMP" 2>/dev/null; then
-      mv "$PRETTY_TEMP" "$TEMP_FILE"
-    else
-      rm -f "$PRETTY_TEMP"
-    fi
-  else
-    rm -f "$PRETTY_TEMP"
-  fi
-fi
+# Parse table and write CSVs using Python
+python3 - "$TEMP_TABLE" "${CURRENT_DIR}/${CURRENT_CSV}" "${CURRENT_DIR}/${HISTORY_CSV}" "$SCRAPED_AT" << 'PYEOF'
+import sys
+import csv
+import os
+from html.parser import HTMLParser
 
-# Move to final destination
-mv "$TEMP_FILE" "$FULL_PATH"
+class TableParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tables = []
+        self._in_table = False
+        self._in_row = False
+        self._in_cell = False
+        self._current_rows = []
+        self._current_row = []
+        self._current_cell_parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'table':
+            self._in_table = True
+            self._current_rows = []
+        elif tag == 'tr' and self._in_table:
+            self._in_row = True
+            self._current_row = []
+        elif tag in ('td', 'th') and self._in_row:
+            self._in_cell = True
+            self._current_cell_parts = []
+
+    def handle_endtag(self, tag):
+        if tag == 'table':
+            self._in_table = False
+            if self._current_rows:
+                self.tables.append(self._current_rows)
+        elif tag == 'tr' and self._in_row:
+            self._in_row = False
+            if self._current_row:
+                self._current_rows.append(self._current_row)
+        elif tag in ('td', 'th') and self._in_cell:
+            self._in_cell = False
+            self._current_row.append(' '.join(self._current_cell_parts).strip())
+
+    def handle_data(self, data):
+        if self._in_cell:
+            stripped = data.strip()
+            if stripped:
+                self._current_cell_parts.append(stripped)
+
+
+temp_file, current_csv, history_csv, scraped_at = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+with open(temp_file, 'r', encoding='utf-8', errors='replace') as f:
+    html_content = f.read()
+
+parser = TableParser()
+parser.feed(html_content)
+
+if not parser.tables:
+    print("Error: No table found in the fetched content", file=sys.stderr)
+    sys.exit(1)
+
+# Use the largest table (most rows)
+rows = max(parser.tables, key=len)
+
+if len(rows) < 2:
+    print("Error: Table has no data rows", file=sys.stderr)
+    sys.exit(1)
+
+print(f"Found table with {len(rows) - 1} data rows")
+
+header = rows[0] + ['scraped_at']
+data_rows = [row + [scraped_at] for row in rows[1:]]
+
+# Write current CSV (overwrite each run)
+with open(current_csv, 'w', newline='', encoding='utf-8') as f:
+    writer = csv.writer(f)
+    writer.writerow(header)
+    writer.writerows(data_rows)
+print(f"Written to {current_csv}")
+
+# Append only new unique rows to history CSV
+existing_keys = set()
+history_exists = os.path.exists(history_csv)
+if history_exists:
+    with open(history_csv, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        next(reader, None)  # skip header
+        for row in reader:
+            # Key on all columns except scraped_at (last column)
+            existing_keys.add(tuple(row[:-1]))
+
+new_rows = [row for row in data_rows if tuple(row[:-1]) not in existing_keys]
+
+with open(history_csv, 'a', newline='', encoding='utf-8') as f:
+    writer = csv.writer(f)
+    if not history_exists:
+        writer.writerow(header)
+    writer.writerows(new_rows)
+print(f"Appended {len(new_rows)} new row(s) to {history_csv}")
+PYEOF
+
+rm -f "$TEMP_TABLE"
