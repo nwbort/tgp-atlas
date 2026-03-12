@@ -1,38 +1,15 @@
 #!/usr/bin/env bash
 #
-# download - Simple downloader that always constructs the filename from the URL
+# download - Fetch TGP fuel pricing from API and save as CSV
 # Usage: ./download.sh URL
 
 set -e
 
-# Function to detect MIME type and return appropriate extension
-get_file_extension() {
-  local file_path="$1"
-  local mime_type=$(file --mime-type -b "$file_path")
-  local extension=""
-  
-  case "$mime_type" in
-    text/html)                extension=".html" ;;
-    application/json)         extension=".json" ;;
-    text/plain)               extension=".txt" ;;
-    application/javascript)   extension=".js" ;;
-    application/xml|text/xml) extension=".xml" ;;
-    application/pdf)          extension=".pdf" ;;
-    image/jpeg)               extension=".jpg" ;;
-    image/png)                extension=".png" ;;
-    image/gif)                extension=".gif" ;;
-    image/svg+xml)            extension=".svg" ;;
-    application/zip)          extension=".zip" ;;
-    application/gzip)         extension=".gz" ;;
-    application/x-tar)        extension=".tar" ;;
-    application/x-bzip2)      extension=".bz2" ;;
-    *)                        extension=".html" ;; # Default to HTML if unknown
-  esac
-  
-  echo "$extension"
-}
+CURRENT_CSV="tgp-atlas-current.csv"
+HISTORY_CSV="tgp-atlas-history.csv"
+CURRENT_DIR="$(pwd)"
+SCRAPED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Check if URL provided
 if [ $# -ne 1 ]; then
   echo "Usage: $0 URL"
   exit 1
@@ -40,56 +17,66 @@ fi
 
 URL="$1"
 
-# Validate URL format (must start with http:// or https://)
 if [[ ! "$URL" =~ ^https?:// ]]; then
   echo "Error: URL must start with http:// or https://"
   exit 1
 fi
 
-# Create temporary file
-TEMP_FILE=$(mktemp)
-
-# Download the file
 echo "Downloading $URL"
-curl -s -L "$URL" -o "$TEMP_FILE" || {
+TEMP_JSON=$(mktemp)
+curl -s -L "$URL" -o "$TEMP_JSON" || {
   echo "Error: Failed to download $URL"
-  rm -f "$TEMP_FILE"
+  rm -f "$TEMP_JSON"
   exit 1
 }
 
-# Get file extension based on MIME type
-EXTENSION=$(get_file_extension "$TEMP_FILE")
+python3 - "$TEMP_JSON" "${CURRENT_DIR}/${CURRENT_CSV}" "${CURRENT_DIR}/${HISTORY_CSV}" "$SCRAPED_AT" << 'PYEOF'
+import sys
+import csv
+import json
+import os
 
-# Always construct filename from the URL, replacing slashes with hyphens
-FILENAME=$(echo "$URL" | sed -E 's|^https?://||' | sed -E 's|^www\.||' | sed 's|/$||' | sed 's|/|-|g')
+temp_file, current_csv, history_csv, scraped_at = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
-# Add extension to the filename
-FILENAME="${FILENAME}${EXTENSION}"
+with open(temp_file, 'r', encoding='utf-8') as f:
+    records = json.load(f)
 
-# Make sure we don't end up with just an extension
-if [ "$FILENAME" = "${EXTENSION}" ]; then
-  FILENAME="index${EXTENSION}"
-fi
+if not records:
+    print("Error: Empty response from API", file=sys.stderr)
+    sys.exit(1)
 
-# Get the current directory to ensure we save to this location
-CURRENT_DIR="$(pwd)"
-FULL_PATH="${CURRENT_DIR}/${FILENAME}"
+FIELDS = ['state_name', 'city_name', 'product_name', 'margin_price', 'fuel_price', 'final_price', 'created_at', 'updated_at']
+header = FIELDS + ['scraped_at']
+data_rows = [[str(r.get(f, '')) for f in FIELDS] + [scraped_at] for r in records]
 
-# Pretty-print JSON if applicable
-if [ "$EXTENSION" = ".json" ]; then
-  # Create another temporary file for the pretty-printed version
-  PRETTY_TEMP=$(mktemp)
-  # Try to pretty-print with jq, but don't fail if jq fails
-  if command -v jq &> /dev/null; then
-    if jq . "$TEMP_FILE" > "$PRETTY_TEMP" 2>/dev/null; then
-      mv "$PRETTY_TEMP" "$TEMP_FILE"
-    else
-      rm -f "$PRETTY_TEMP"
-    fi
-  else
-    rm -f "$PRETTY_TEMP"
-  fi
-fi
+print(f"Fetched {len(data_rows)} records")
 
-# Move to final destination
-mv "$TEMP_FILE" "$FULL_PATH"
+# Write current CSV (overwrite each run)
+with open(current_csv, 'w', newline='', encoding='utf-8') as f:
+    writer = csv.writer(f)
+    writer.writerow(header)
+    writer.writerows(data_rows)
+print(f"Written to {current_csv}")
+
+# Append only new unique rows to history CSV
+# Uniqueness is based on all columns except scraped_at
+existing_keys = set()
+history_exists = os.path.exists(history_csv)
+if history_exists:
+    with open(history_csv, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        next(reader, None)  # skip header
+        for row in reader:
+            existing_keys.add(tuple(row[:-1]))
+
+new_rows = [row for row in data_rows if tuple(row[:-1]) not in existing_keys]
+
+with open(history_csv, 'a', newline='', encoding='utf-8') as f:
+    writer = csv.writer(f)
+    if not history_exists:
+        writer.writerow(header)
+    writer.writerows(new_rows)
+print(f"Appended {len(new_rows)} new row(s) to {history_csv}")
+PYEOF
+
+rm -f "$TEMP_JSON"
