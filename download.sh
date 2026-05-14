@@ -7,6 +7,9 @@ set -e
 
 CURRENT_CSV="tgp-atlas-current.csv"
 HISTORY_CSV="tgp-atlas-history.csv"
+NORMALISED_CSV="tgp_data.csv"
+NORMALISED_JSON="tgp_data.json"
+PROVIDER="atlas"
 CURRENT_DIR="$(pwd)"
 SCRAPED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -77,6 +80,88 @@ with open(history_csv, 'a', newline='', encoding='utf-8') as f:
         writer.writerow(header)
     writer.writerows(new_rows)
 print(f"Appended {len(new_rows)} new row(s) to {history_csv}")
+PYEOF
+
+python3 - "${CURRENT_DIR}/${HISTORY_CSV}" "${CURRENT_DIR}/${NORMALISED_CSV}" "${CURRENT_DIR}/${NORMALISED_JSON}" "$PROVIDER" << 'PYEOF'
+import sys
+import csv
+import json
+from datetime import datetime, timezone
+
+history_csv, normalised_csv, normalised_json, provider = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+STATE_MAP = {
+    'New South Wales': 'NSW',
+    'Victoria': 'VIC',
+    'Queensland': 'QLD',
+    'South Australia': 'SA',
+    'Western Australia': 'WA',
+    'Northern Territory': 'NT',
+    'Tasmania': 'TAS',
+    'Australian Capital Territory': 'ACT',
+}
+
+FUEL_MAP = {
+    'Unleaded 91 (ULP)': 'ulp91',
+    'Blended E10': 'e10',
+    'Pulp - 95': 'p95',
+    'Premium - 95': 'p95',
+    'Premium - 98': 'p98',
+    'Diesel': 'diesel',
+    'Premium Diesel': 'prediesel',
+    'Biodiesel B5': 'b5',
+}
+
+FIELDS = ['date', 'state', 'location', 'fuel_type', 'price_cpl']
+
+seen = set()
+rows = []
+skipped = 0
+
+with open(history_csv, 'r', newline='', encoding='utf-8') as f:
+    reader = csv.DictReader(f)
+    for r in reader:
+        state = STATE_MAP.get(r['state_name'])
+        fuel = FUEL_MAP.get(r['product_name'])
+        if not state or not fuel:
+            skipped += 1
+            continue
+        try:
+            dollars_per_litre = float(r['final_price'])
+        except (ValueError, TypeError):
+            skipped += 1
+            continue
+        if dollars_per_litre <= 0:
+            skipped += 1
+            continue
+        price_cpl = round(dollars_per_litre * 100, 1)
+        date = r['scraped_at'][:10]
+        location = r['city_name']
+        key = (date, state, location, fuel)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append([date, state, location, fuel, price_cpl])
+
+rows.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
+
+with open(normalised_csv, 'w', newline='', encoding='utf-8') as f:
+    writer = csv.writer(f)
+    writer.writerow(FIELDS)
+    writer.writerows(rows)
+print(f"Written {len(rows)} rows to {normalised_csv} (skipped {skipped})")
+
+payload = {
+    'provider': provider,
+    'updated': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+    'fields': FIELDS,
+    'records': rows,
+}
+
+with open(normalised_json, 'w', encoding='utf-8') as f:
+    json.dump(payload, f, separators=(',', ':'))
+    f.write('\n')
+print(f"Written {len(rows)} records to {normalised_json}")
 PYEOF
 
 rm -f "$TEMP_JSON"
