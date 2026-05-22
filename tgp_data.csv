@@ -444,3 +444,12 @@ date,state,location,fuel_type,price_cpl
 2026-05-21,WA,Perth,p95,189.5
 2026-05-21,WA,Perth,p98,199.6
 2026-05-21,WA,Perth,ulp91,178.5
+2026-05-22,QLD,Brisbane,diesel,205.4
+2026-05-22,QLD,Brisbane,e10,182.1
+2026-05-22,QLD,Brisbane,p95,192.9
+2026-05-22,QLD,Brisbane,p98,207.4
+2026-05-22,QLD,Brisbane,ulp91,180.7
+2026-05-22,WA,Perth,diesel,203.5
+2026-05-22,WA,Perth,p95,188.8
+2026-05-22,WA,Perth,p98,198.9
+2026-05-22,WA,Perth,ulp91,177.8
