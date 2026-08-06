@@ -1137,3 +1137,17 @@ date,state,location,fuel_type,price_cpl
 2026-08-05,WA,Perth,p95,208.6
 2026-08-05,WA,Perth,p98,218.7
 2026-08-05,WA,Perth,ulp91,197.6
+2026-08-06,QLD,Brisbane,diesel,228.9
+2026-08-06,QLD,Brisbane,e10,190.3
+2026-08-06,QLD,Brisbane,p95,200.0
+2026-08-06,QLD,Brisbane,p98,216.7
+2026-08-06,QLD,Brisbane,ulp91,190.9
+2026-08-06,VIC,Melbourne,diesel,230.7
+2026-08-06,VIC,Melbourne,e10,190.7
+2026-08-06,VIC,Melbourne,p95,200.4
+2026-08-06,VIC,Melbourne,p98,218.1
+2026-08-06,VIC,Melbourne,ulp91,190.0
+2026-08-06,WA,Perth,diesel,231.1
+2026-08-06,WA,Perth,p95,205.5
+2026-08-06,WA,Perth,p98,215.5
+2026-08-06,WA,Perth,ulp91,194.4
